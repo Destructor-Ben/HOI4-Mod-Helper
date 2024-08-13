@@ -11,9 +11,9 @@ internal class ModBuilder(string modPath, string outputPath)
     public static string DocumentsFolder { get; } = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : "~/.local/share";
     public static string Hoi4ModFolder { get; } = Path.Join(DocumentsFolder, "Paradox Interactive/Hearts of Iron IV/mod");
 
-    private List<string> ignoredExtensions = [];
-    private List<string> ignoredFolders = [];
-    private List<string> ignoredFiles = [];
+    private readonly List<string> ignoredExtensions = [];
+    private readonly List<string> ignoredFolders = [];
+    private readonly List<string> ignoredFiles = [];
 
     public void Build()
     {
@@ -122,7 +122,6 @@ internal class ModBuilder(string modPath, string outputPath)
         Console.WriteLine("Transformed to: " + destinationFile);
     }
 
-    // TODO: proper file ignoring
     private bool ShouldIgnoreFile(string fileName)
     {
         if (fileName == "ignored_files.mod")
@@ -134,6 +133,7 @@ internal class ModBuilder(string modPath, string outputPath)
         if (ignoredExtensions.Any(extension => extension == Path.GetExtension(fileName)))
             return true;
 
+        // ReSharper disable once ConvertIfStatementToReturnStatement
         if (ignoredFiles.Any(file => file == fileName))
             return true;
 
