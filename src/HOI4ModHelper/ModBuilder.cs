@@ -127,7 +127,8 @@ internal class ModBuilder(string modPath, string outputPath)
         if (fileName == "ignored_files.mod")
             return true;
 
-        if (ignoredFolders.Any(folder => fileName.StartsWith(folder, StringComparison.Ordinal)))
+        // TODO: this is a mess
+        if (ignoredFolders.Any(folder => fileName.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar])[0].StartsWith(Path.TrimEndingDirectorySeparator(folder), StringComparison.Ordinal)))
             return true;
 
         if (ignoredExtensions.Any(extension => extension == Path.GetExtension(fileName)))
