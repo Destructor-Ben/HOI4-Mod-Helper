@@ -1,5 +1,4 @@
 ﻿using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
 
 namespace HOI4ModHelper;
 
@@ -12,7 +11,9 @@ internal class ModBuilder(string modPath, string outputPath)
     public static string DocumentsFolder { get; } = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : "~/.local/share";
     public static string Hoi4ModFolder { get; } = Path.Join(DocumentsFolder, "Paradox Interactive/Hearts of Iron IV/mod");
 
-    private List<Regex> ignoredFileRegexes = [];
+    private List<string> ignoredExtensions = [];
+    private List<string> ignoredFolders = [];
+    private List<string> ignoredFiles = [];
 
     public void Build()
     {
@@ -20,6 +21,9 @@ internal class ModBuilder(string modPath, string outputPath)
         Console.WriteLine("Mod Name: " + ModName);
         Console.WriteLine("Mod Path: " + ModPath);
         Console.WriteLine("Output Path: " + OutputPath);
+
+        // Parse ignored_files.mod
+        ParseIgnoredFilesInfo();
 
         // Delete old stuff
         // TODO: it might pay to verify that this isn't deleting everything on someones PC
@@ -65,7 +69,40 @@ internal class ModBuilder(string modPath, string outputPath)
         }
     }
 
-    // TODO: make flags good, add file ignoring
+    private void ParseIgnoredFilesInfo()
+    {
+        string ignoredFilesInfoPath = Path.Join(ModPath, "ignored_files.mod");
+        if (!File.Exists(ignoredFilesInfoPath))
+            return;
+
+        Console.WriteLine("Parsing ignored files...");
+
+        // Loop over each line, ignore comments and empty lines
+        foreach (string line in File.ReadLines(ignoredFilesInfoPath)
+                                    .Where(l => !string.IsNullOrWhiteSpace(l))
+                                    .Where(l => !l.StartsWith('#')))
+        {
+            // Either ignore a top-level dir, all files with a certain extension, or a single file
+            // TODO: make this more like a .gitignore and use regex, also this is a terrible way of handling this
+            if (line.StartsWith('*'))
+            {
+                // Extension
+                ignoredExtensions.Add(Path.GetExtension(line));
+            }
+            else if (line.EndsWith(Path.DirectorySeparatorChar) || line.EndsWith(Path.AltDirectorySeparatorChar))
+            {
+                // Top level dir
+                ignoredFolders.Add(line);
+            }
+            else
+            {
+                // Single file
+                ignoredFiles.Add(line);
+            }
+        }
+    }
+
+    // TODO: do the flags and image stuff
     private void TransformFile(string file)
     {
         string relativeFileName = Path.GetRelativePath(ModPath, file) // (file.StartsWith(ModPath, StringComparison.Ordinal) ? file[ModPath.Length..] : file)
@@ -86,9 +123,18 @@ internal class ModBuilder(string modPath, string outputPath)
     }
 
     // TODO: proper file ignoring
-    private bool ShouldIgnoreFile(string file)
+    private bool ShouldIgnoreFile(string fileName)
     {
-        if (file.StartsWith(".git", StringComparison.Ordinal))
+        if (fileName == "ignored_files.mod")
+            return true;
+
+        if (ignoredFolders.Any(folder => fileName.StartsWith(folder, StringComparison.Ordinal)))
+            return true;
+
+        if (ignoredExtensions.Any(extension => extension == Path.GetExtension(fileName)))
+            return true;
+
+        if (ignoredFiles.Any(file => file == fileName))
             return true;
 
         return false;
