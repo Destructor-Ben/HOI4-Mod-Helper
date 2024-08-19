@@ -1,7 +1,6 @@
 ﻿using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 using Svg;
 using Image = SixLabors.ImageSharp.Image;
@@ -114,9 +113,7 @@ internal class ModBuilder(string modPath, string outputPath)
         if (relativeFileName == "ignored_files.mod" || ignoredFiles.IsIgnored(relativeFileName))
             return;
 
-        // Transform images
-        // TODO: handle all ImageSharp supported file types, probably try and add SVG support too
-        // TODO: make all images handled properly
+        // Images
         string fileExtension = Path.GetExtension(relativeFileName);
         if (SupportedImageFormats.Contains(fileExtension))
         {
@@ -124,43 +121,8 @@ internal class ModBuilder(string modPath, string outputPath)
             return;
         }
 
-        if (fileExtension is ".png" or ".svg" && relativeFileName != "thumbnail.png")
-        {
-            // Render SVGs
-            if (fileExtension == ".svg")
-            {
-                var svg = SvgDocument.Open(file);
-
-                // Not all svgs will have width and height attributes (automatically handled), sometimes a view box instead
-                // TODO: handle viewbox attribute, also supply default width and height
-                // TODO: not all svgs will include a width and height
-                //svg.Width = 100;
-                //svg.Height = 100;
-                var bitmap = svg.Draw();
-                var stream = new MemoryStream();
-                bitmap.Save(stream, ImageFormat.Bmp);
-                stream.Seek(0, SeekOrigin.Begin);
-                var image = Image.Load<Rgba32>(stream);
-
-                string dest = Path.Join(OutputPath, relativeFileName);
-                PrintCopyMessage(file, dest);
-                CreateFolderForFile(dest);
-                image.SaveAsPng(dest);
-                return;
-            }
-
-            // Pretty much only flags use TGA, the rest of the images use DDS
-            if (relativeFileName.StartsWith("gfx/flags", StringComparison.Ordinal))
-                TransformFlag(file, relativeFileName);
-            else
-                TransformImage(file,, extension relativeFileName);
-
-            return;
-        }
-
         // Normal files
         string destinationFile = Path.Join(OutputPath, relativeFileName);
-
         PrintCopyMessage(file, destinationFile);
         CreateFolderForFile(destinationFile);
         File.Copy(file, destinationFile, true);
@@ -168,26 +130,27 @@ internal class ModBuilder(string modPath, string outputPath)
 
     private void TransformImage(string file, string extension, string relativeFileName)
     {
+        // TODO: dds saving and loading
         // Load image
-        Image image = extension is ".svg" ? ConvertSvgToBitmap(file) : Image.Load(file);
+        var image = extension is ".svg" ? ConvertSvgToBitmap(file) : Image.Load(file);
 
         // Default output is a DDS
         string outputType = "dds";
 
         // Make thumbnail.png output type a PNG
-        if (Path.ChangeExtension(file, null) == "thumbnail")
+        if (Path.ChangeExtension(relativeFileName, null) == "thumbnail")
             outputType = "png";
 
         // Make flags have an output of a TGA
+        if (file.StartsWith("gfx/flags", StringComparison.Ordinal))
+            outputType = "tga";
 
-        // Turn png into DDS
-
-        string destinationFile = Path.Join(OutputPath, Path.ChangeExtension(relativeFileName, "dds"));
-
+        // Copy the file over
+        // TODO: make the flags output work again
+        string destinationFile = Path.Join(OutputPath, Path.ChangeExtension(relativeFileName, outputType));
         PrintCopyMessage(file, destinationFile);
         CreateFolderForFile(destinationFile);
-
-        image.SaveAsTga(destinationFile); // TODO: save as DDS - probably make my own library for ImageSharp or improve ImageSharp.Textures
+        image.Save(destinationFile); // TODO: save as DDS - probably make my own library for ImageSharp or improve ImageSharp.Textures
     }
 
     private static Image ConvertSvgToBitmap(string file)
@@ -203,6 +166,7 @@ internal class ModBuilder(string modPath, string outputPath)
         return Image.Load(stream);
     }
 
+    // TODO: make flags work again
     private void TransformFlag(string file, string relativeFileName)
     {
         // TODO: what if this overwrites other files?
