@@ -1,6 +1,10 @@
-﻿using System.Runtime.InteropServices;
+﻿using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using Svg;
+using Image = SixLabors.ImageSharp.Image;
 
 namespace HOI4ModHelper;
 
@@ -15,6 +19,21 @@ internal class ModBuilder(string modPath, string outputPath)
     public static string Hoi4ModFolder { get; } = Path.Join(DocumentsFolder, "Paradox Interactive/Hearts of Iron IV/mod");
 
     private readonly Ignore.Ignore ignoredFiles = new();
+
+    private static readonly List<string> SupportedImageFormats =
+    [
+        ".gif",
+        ".webp",
+        ".pbm",
+        ".jpeg",
+        ".qoi",
+        ".tga",
+        ".tiff",
+        ".bmp",
+        ".png",
+        ".dds",
+        ".svg",
+    ];
 
     public void Build()
     {
@@ -95,16 +114,46 @@ internal class ModBuilder(string modPath, string outputPath)
         if (relativeFileName == "ignored_files.mod" || ignoredFiles.IsIgnored(relativeFileName))
             return;
 
-        // Transform all pngs except the thumbnail into other files
+        // Transform images
         // TODO: handle all ImageSharp supported file types, probably try and add SVG support too
+        // TODO: make all images handled properly
         string fileExtension = Path.GetExtension(relativeFileName);
-        if (fileExtension == ".png" && relativeFileName != "thumbnail.png")
+        if (SupportedImageFormats.Contains(fileExtension))
         {
+            TransformImage(file, fileExtension, relativeFileName);
+            return;
+        }
+
+        if (fileExtension is ".png" or ".svg" && relativeFileName != "thumbnail.png")
+        {
+            // Render SVGs
+            if (fileExtension == ".svg")
+            {
+                var svg = SvgDocument.Open(file);
+
+                // Not all svgs will have width and height attributes (automatically handled), sometimes a view box instead
+                // TODO: handle viewbox attribute, also supply default width and height
+                // TODO: not all svgs will include a width and height
+                //svg.Width = 100;
+                //svg.Height = 100;
+                var bitmap = svg.Draw();
+                var stream = new MemoryStream();
+                bitmap.Save(stream, ImageFormat.Bmp);
+                stream.Seek(0, SeekOrigin.Begin);
+                var image = Image.Load<Rgba32>(stream);
+
+                string dest = Path.Join(OutputPath, relativeFileName);
+                PrintCopyMessage(file, dest);
+                CreateFolderForFile(dest);
+                image.SaveAsPng(dest);
+                return;
+            }
+
             // Pretty much only flags use TGA, the rest of the images use DDS
             if (relativeFileName.StartsWith("gfx/flags", StringComparison.Ordinal))
                 TransformFlag(file, relativeFileName);
             else
-                TransformImage(file, relativeFileName);
+                TransformImage(file,, extension relativeFileName);
 
             return;
         }
@@ -117,16 +166,41 @@ internal class ModBuilder(string modPath, string outputPath)
         File.Copy(file, destinationFile, true);
     }
 
-    private void TransformImage(string file, string relativeFileName)
+    private void TransformImage(string file, string extension, string relativeFileName)
     {
+        // Load image
+        Image image = extension is ".svg" ? ConvertSvgToBitmap(file) : Image.Load(file);
+
+        // Default output is a DDS
+        string outputType = "dds";
+
+        // Make thumbnail.png output type a PNG
+        if (Path.ChangeExtension(file, null) == "thumbnail")
+            outputType = "png";
+
+        // Make flags have an output of a TGA
+
         // Turn png into DDS
-        var image = Image.Load(file);
+
         string destinationFile = Path.Join(OutputPath, Path.ChangeExtension(relativeFileName, "dds"));
 
         PrintCopyMessage(file, destinationFile);
         CreateFolderForFile(destinationFile);
 
         image.SaveAsTga(destinationFile); // TODO: save as DDS - probably make my own library for ImageSharp or improve ImageSharp.Textures
+    }
+
+    private static Image ConvertSvgToBitmap(string file)
+    {
+        var svg = SvgDocument.Open(file);
+
+        // Not all svgs will have width and height attributes (automatically handled), sometimes a view box instead
+        // TODO: handle view box attribute, also supply default width and height since not all SVGs will have a width and height - maybe we just don't care
+        var bitmap = svg.Draw();
+        var stream = new MemoryStream();
+        bitmap.Save(stream, ImageFormat.Bmp);
+        stream.Seek(0, SeekOrigin.Begin);
+        return Image.Load(stream);
     }
 
     private void TransformFlag(string file, string relativeFileName)
