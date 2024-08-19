@@ -1,19 +1,20 @@
 ﻿using System.Runtime.InteropServices;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Processing;
 
 namespace HOI4ModHelper;
 
+// TODO: make all backslashes forward slashes in paths
 internal class ModBuilder(string modPath, string outputPath)
 {
-    public string ModPath { get; } = modPath;
-    public string ModName => Path.GetFileName(ModPath.TrimEnd(Path.DirectorySeparatorChar).TrimEnd(Path.AltDirectorySeparatorChar));
-    public string OutputPath => Path.Join(outputPath, ModName);
+    public string ModPath { get; } = modPath.Replace('\\', '/');
+    public string ModName => Path.GetFileName(Path.TrimEndingDirectorySeparator(ModPath));
+    public string OutputPath => Path.Join(outputPath.Replace('\\', '/'), ModName);
 
     public static string DocumentsFolder { get; } = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : "~/.local/share";
     public static string Hoi4ModFolder { get; } = Path.Join(DocumentsFolder, "Paradox Interactive/Hearts of Iron IV/mod");
 
-    private readonly List<string> ignoredExtensions = [];
-    private readonly List<string> ignoredFolders = [];
-    private readonly List<string> ignoredFiles = [];
+    private readonly Ignore.Ignore ignoredFiles = new();
 
     public void Build()
     {
@@ -52,11 +53,8 @@ internal class ModBuilder(string modPath, string outputPath)
         fileWatcher.Renamed += (_, e) => UpdateFile(e.FullPath);
 
         // Begin file watching
-        Console.WriteLine("File watcher running");
+        Console.WriteLine("File watcher running, press Enter to exit");
         fileWatcher.EnableRaisingEvents = true;
-
-        // Wait for the user to exit
-        Console.WriteLine("Press any key to quit");
         Console.ReadKey();
 
         return;
@@ -64,91 +62,107 @@ internal class ModBuilder(string modPath, string outputPath)
         void UpdateFile(string file)
         {
             Console.WriteLine();
-            Console.WriteLine("File Changed: " + file);
+            Console.WriteLine("File changed: " + file);
             TransformFile(file);
         }
     }
 
     private void ParseIgnoredFilesInfo()
     {
+        // Check if ignored_files.mod exists
         string ignoredFilesInfoPath = Path.Join(ModPath, "ignored_files.mod");
         if (!File.Exists(ignoredFilesInfoPath))
             return;
 
+        // Parse the file
         Console.WriteLine("Parsing ignored files...");
 
-        // Loop over each line, ignore comments and empty lines
-        foreach (string line in File.ReadLines(ignoredFilesInfoPath)
-                                    .Where(l => !string.IsNullOrWhiteSpace(l))
-                                    .Where(l => !l.StartsWith('#')))
+        // Loop over each line and add it to the ignored list
+        foreach (string? line in File.ReadLines(ignoredFilesInfoPath))
         {
-            // Either ignore a top-level dir, all files with a certain extension, or a single file
-            // TODO: make this more like a .gitignore and use regex, also this is a terrible way of handling this
-            if (line.StartsWith('*'))
-            {
-                // Extension
-                ignoredExtensions.Add(Path.GetExtension(line));
-            }
-            else if (line.EndsWith(Path.DirectorySeparatorChar) || line.EndsWith(Path.AltDirectorySeparatorChar))
-            {
-                // Top level dir
-                ignoredFolders.Add(line);
-            }
-            else
-            {
-                // Single file
-                ignoredFiles.Add(line);
-            }
+            ignoredFiles.Add(line);
         }
     }
 
-    // TODO: do the flags and image stuff
     private void TransformFile(string file)
     {
-        string relativeFileName = Path.GetRelativePath(ModPath, file) // (file.StartsWith(ModPath, StringComparison.Ordinal) ? file[ModPath.Length..] : file)
-                                      .TrimStart(Path.DirectorySeparatorChar)
-                                      .TrimStart(Path.AltDirectorySeparatorChar)
-                                      .TrimEnd(Path.DirectorySeparatorChar)
-                                      .TrimEnd(Path.AltDirectorySeparatorChar);
+        string relativeFileName = Path.GetRelativePath(ModPath, file)
+                                      .Replace('\\', '/')
+                                      .TrimStart('/')
+                                      .TrimEnd('/');
 
-        if (ShouldIgnoreFile(relativeFileName))
+        // Ignore the file if we need to
+        if (relativeFileName == "ignored_files.mod" || ignoredFiles.IsIgnored(relativeFileName))
             return;
 
-        Console.WriteLine("Transforming file: " + file);
+        // Transform all pngs except the thumbnail into other files
+        // TODO: handle all ImageSharp supported file types, probably try and add SVG support too
+        string fileExtension = Path.GetExtension(relativeFileName);
+        if (fileExtension == ".png" && relativeFileName != "thumbnail.png")
+        {
+            // Pretty much only flags use TGA, the rest of the images use DDS
+            if (relativeFileName.StartsWith("gfx/flags", StringComparison.Ordinal))
+                TransformFlag(file, relativeFileName);
+            else
+                TransformImage(file, relativeFileName);
 
+            return;
+        }
+
+        // Normal files
         string destinationFile = Path.Join(OutputPath, relativeFileName);
-        CopyFile(file, destinationFile);
 
-        Console.WriteLine("Transformed to: " + destinationFile);
+        PrintCopyMessage(file, destinationFile);
+        CreateFolderForFile(destinationFile);
+        File.Copy(file, destinationFile, true);
     }
 
-    private bool ShouldIgnoreFile(string fileName)
+    private void TransformImage(string file, string relativeFileName)
     {
-        if (fileName == "ignored_files.mod")
-            return true;
+        // Turn png into DDS
+        var image = Image.Load(file);
+        string destinationFile = Path.Join(OutputPath, Path.ChangeExtension(relativeFileName, "dds"));
 
-        // TODO: this is a mess
-        if (ignoredFolders.Any(folder => fileName.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar])[0].StartsWith(Path.TrimEndingDirectorySeparator(folder), StringComparison.Ordinal)))
-            return true;
+        PrintCopyMessage(file, destinationFile);
+        CreateFolderForFile(destinationFile);
 
-        if (ignoredExtensions.Any(extension => extension == Path.GetExtension(fileName)))
-            return true;
-
-        // ReSharper disable once ConvertIfStatementToReturnStatement
-        if (ignoredFiles.Any(file => file == fileName))
-            return true;
-
-        return false;
+        image.SaveAsTga(destinationFile); // TODO: save as DDS - probably make my own library for ImageSharp or improve ImageSharp.Textures
     }
 
-    private static void CopyFile(string srcPath, string destPath)
+    private void TransformFlag(string file, string relativeFileName)
     {
-        // For some reason, the folder has to be created if it doesn't exist
-        string destinationFolder = Path.GetDirectoryName(destPath) ?? throw new NullReferenceException("Copy destination path isn't in a folder!");
+        // TODO: what if this overwrites other files?
+        var image = Image.Load(file);
+
+        // Large, medium, and small flags
+        SaveFlag(82, 52, "");
+        SaveFlag(41, 26, "medium");
+        SaveFlag(10, 7, "small");
+
+        return;
+
+        void SaveFlag(int width, int height, string flagFolder)
+        {
+            // TODO: wtf is this wizardry
+            string destinationFile = Path.Join(OutputPath, "gfx/flags", flagFolder, Path.ChangeExtension(string.Join('/', relativeFileName.Split('/')[2..]), "tga"));
+            var newImage = image.Clone(i => i.Resize(width, height));
+
+            PrintCopyMessage(file, destinationFile);
+            CreateFolderForFile(destinationFile);
+            newImage.SaveAsTga(destinationFile);
+        }
+    }
+
+    // For some reason, the folder has to be created if it doesn't exist for stuff like copying
+    private static void CreateFolderForFile(string filePath)
+    {
+        string destinationFolder = Path.GetDirectoryName(filePath) ?? throw new NullReferenceException("The given file isn't in a folder");
         if (!Directory.Exists(destinationFolder))
             Directory.CreateDirectory(destinationFolder);
+    }
 
-        // Copy the file
-        File.Copy(srcPath, destPath, true);
+    private static void PrintCopyMessage(string sourcePath, string destinationPath)
+    {
+        Console.WriteLine($"Copying '{sourcePath}'\n     to '{destinationPath}'");
     }
 }
