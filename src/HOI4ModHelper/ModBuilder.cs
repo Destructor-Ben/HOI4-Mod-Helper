@@ -7,15 +7,14 @@ using Image = SixLabors.ImageSharp.Image;
 
 namespace HOI4ModHelper;
 
-// TODO: make all backslashes forward slashes in paths
 internal class ModBuilder(string modPath, string outputPath)
 {
     public string ModPath { get; } = modPath.Replace('\\', '/');
     public string ModName => Path.GetFileName(Path.TrimEndingDirectorySeparator(ModPath));
-    public string OutputPath => Path.Join(outputPath.Replace('\\', '/'), ModName);
+    public string OutputPath => Path.Join(outputPath, ModName).Replace('\\', '/');
 
-    public static string DocumentsFolder { get; } = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : "~/.local/share";
-    public static string Hoi4ModFolder { get; } = Path.Join(DocumentsFolder, "Paradox Interactive/Hearts of Iron IV/mod");
+    public static string DocumentsFolder { get; } = (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : "~/.local/share").Replace('\\', '/');
+    public static string Hoi4ModFolder { get; } = Path.Join(DocumentsFolder, "Paradox Interactive/Hearts of Iron IV/mod").Replace('\\', '/');
 
     private readonly Ignore.Ignore ignoredFiles = new();
 
@@ -30,7 +29,7 @@ internal class ModBuilder(string modPath, string outputPath)
         ".tiff",
         ".bmp",
         ".png",
-        ".dds",
+        // TODO: ".dds",
         ".svg",
     ];
 
@@ -132,25 +131,49 @@ internal class ModBuilder(string modPath, string outputPath)
     {
         // TODO: dds saving and loading
         // Load image
-        var image = extension is ".svg" ? ConvertSvgToBitmap(file) : Image.Load(file);
+        using var image = extension is ".svg" ? ConvertSvgToBitmap(file) : Image.Load(file);
 
         // Default output is a DDS
-        string outputType = "dds";
+        string outputType = "png"; // TODO: "dds";
 
         // Make thumbnail.png output type a PNG
         if (Path.ChangeExtension(relativeFileName, null) == "thumbnail")
             outputType = "png";
 
-        // Make flags have an output of a TGA
-        if (file.StartsWith("gfx/flags", StringComparison.Ordinal))
+        // Make flags have an output of a TGA and copy over differently
+        if (relativeFileName.StartsWith("gfx/flags", StringComparison.Ordinal))
+        {
             outputType = "tga";
+            CopyFlag(82, 52, "");
+            CopyFlag(41, 26, "medium");
+            CopyFlag(10, 7, "small");
+            return;
+        }
 
         // Copy the file over
-        // TODO: make the flags output work again
-        string destinationFile = Path.Join(OutputPath, Path.ChangeExtension(relativeFileName, outputType));
-        PrintCopyMessage(file, destinationFile);
-        CreateFolderForFile(destinationFile);
-        image.Save(destinationFile); // TODO: save as DDS - probably make my own library for ImageSharp or improve ImageSharp.Textures
+        CopyImage(image, relativeFileName);
+
+        return;
+
+        void CopyImage(Image imageToCopy, string outputFile)
+        {
+            string destinationFile = Path.Join(OutputPath, Path.ChangeExtension(outputFile, outputType));
+            PrintCopyMessage(file, destinationFile);
+            CreateFolderForFile(destinationFile);
+            imageToCopy.Save(destinationFile); // TODO: allow saving as DDS
+        }
+
+        void CopyFlag(int width, int height, string flagsFolder)
+        {
+            // Add the flags subdirectory if needed
+            var path = relativeFileName.Split('/').ToList();
+            if (!string.IsNullOrEmpty(flagsFolder))
+                path.Insert(2, flagsFolder);
+
+            // Copy
+            using var newImage = image.Clone(i => i.Resize(width, height));
+            CopyImage(newImage, string.Join('/', path));
+        }
     }
 
     private static Image ConvertSvgToBitmap(string file)
@@ -160,35 +183,10 @@ internal class ModBuilder(string modPath, string outputPath)
         // Not all svgs will have width and height attributes (automatically handled), sometimes a view box instead
         // TODO: handle view box attribute, also supply default width and height since not all SVGs will have a width and height - maybe we just don't care
         var bitmap = svg.Draw();
-        var stream = new MemoryStream();
+        using var stream = new MemoryStream();
         bitmap.Save(stream, ImageFormat.Bmp);
         stream.Seek(0, SeekOrigin.Begin);
         return Image.Load(stream);
-    }
-
-    // TODO: make flags work again
-    private void TransformFlag(string file, string relativeFileName)
-    {
-        // TODO: what if this overwrites other files?
-        var image = Image.Load(file);
-
-        // Large, medium, and small flags
-        SaveFlag(82, 52, "");
-        SaveFlag(41, 26, "medium");
-        SaveFlag(10, 7, "small");
-
-        return;
-
-        void SaveFlag(int width, int height, string flagFolder)
-        {
-            // TODO: wtf is this wizardry
-            string destinationFile = Path.Join(OutputPath, "gfx/flags", flagFolder, Path.ChangeExtension(string.Join('/', relativeFileName.Split('/')[2..]), "tga"));
-            var newImage = image.Clone(i => i.Resize(width, height));
-
-            PrintCopyMessage(file, destinationFile);
-            CreateFolderForFile(destinationFile);
-            newImage.SaveAsTga(destinationFile);
-        }
     }
 
     // For some reason, the folder has to be created if it doesn't exist for stuff like copying
@@ -201,6 +199,6 @@ internal class ModBuilder(string modPath, string outputPath)
 
     private static void PrintCopyMessage(string sourcePath, string destinationPath)
     {
-        Console.WriteLine($"Copying '{sourcePath}'\n     to '{destinationPath}'");
+        Console.WriteLine($"Copying '{sourcePath.Replace('\\', '/')}'\n     to '{destinationPath.Replace('\\', '/')}'");
     }
 }
