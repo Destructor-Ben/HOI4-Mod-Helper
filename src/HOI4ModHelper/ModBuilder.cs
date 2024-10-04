@@ -7,14 +7,28 @@ using Image = SixLabors.ImageSharp.Image;
 
 namespace HOI4ModHelper;
 
-internal class ModBuilder(string modPath, string outputPath)
+// TODO: finish the DDS stuff
+internal class ModBuilder(string modPath, string outputPath, bool isDevBuild)
 {
-    public string ModPath { get; } = modPath.Replace('\\', '/');
-    public string ModName => Path.GetFileName(Path.TrimEndingDirectorySeparator(ModPath));
-    public string OutputPath => Path.Join(outputPath, ModName).Replace('\\', '/');
+    public string ModPath { get; } = modPath.Clean();
 
-    public static string DocumentsFolder { get; } = (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : "~/.local/share").Replace('\\', '/');
-    public static string Hoi4ModFolder { get; } = Path.Join(DocumentsFolder, "Paradox Interactive/Hearts of Iron IV/mod").Replace('\\', '/');
+    public string ModName
+    {
+        get
+        {
+            string name = Path.GetFileName(Path.TrimEndingDirectorySeparator(ModPath));
+            if (IsDevBuild)
+                return name + "_Dev";
+
+            return name;
+        }
+    }
+
+    public string OutputPath => Path.Join(outputPath, ModName).Clean();
+    public bool IsDevBuild { get; } = isDevBuild;
+
+    public static string DocumentsFolder { get; } = (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : "~/.local/share").Clean();
+    public static string Hoi4ModFolder { get; } = Path.Join(DocumentsFolder, "Paradox Interactive/Hearts of Iron IV/mod").Clean();
 
     private readonly Ignore.Ignore ignoredFiles = new();
 
@@ -39,6 +53,8 @@ internal class ModBuilder(string modPath, string outputPath)
         Console.WriteLine("Mod Name: " + ModName);
         Console.WriteLine("Mod Path: " + ModPath);
         Console.WriteLine("Output Path: " + OutputPath);
+        Console.WriteLine("Dev Build: " + IsDevBuild);
+        Console.WriteLine();
 
         // Parse ignored_files.mod
         ParseIgnoredFilesInfo();
@@ -49,11 +65,37 @@ internal class ModBuilder(string modPath, string outputPath)
         if (Directory.Exists(OutputPath))
             Directory.Delete(OutputPath, true);
 
+        Directory.CreateDirectory(OutputPath);
+
+        // Create the mod descriptor in the mods folder
+        Console.WriteLine("Creating descriptor...");
+        string descriptorFilePath = Path.Join(ModPath, "descriptor.mod");
+
+        string descriptorContents = "";
+        if (File.Exists(descriptorFilePath))
+            descriptorContents = File.ReadAllText(descriptorFilePath);
+
+        descriptorContents += $"\npath=\"{OutputPath}\"";
+        descriptorContents = TransformDescriptorContents(descriptorContents);
+
+        // The descriptor goes in the mods folder (one dir up)
+        string outputDescriptorFilePath = string.Join('/', OutputPath.Split('/')[..^1]);
+        outputDescriptorFilePath = Path.Join(outputDescriptorFilePath, ModName + ".mod");
+
+        PrintCopyMessage(descriptorFilePath, outputDescriptorFilePath);
+        CreateFolderForFile(outputDescriptorFilePath);
+        File.WriteAllText(outputDescriptorFilePath, descriptorContents);
+
         // Copy new stuff
+        Console.WriteLine();
+        Console.WriteLine("Transforming files...");
         foreach (string file in Directory.GetFiles(ModPath, "*", SearchOption.AllDirectories))
         {
             TransformFile(file);
         }
+
+        Console.WriteLine();
+        Console.WriteLine("Build completed successfully.");
     }
 
     public void Watch()
@@ -104,9 +146,11 @@ internal class ModBuilder(string modPath, string outputPath)
     private void TransformFile(string file)
     {
         string relativeFileName = Path.GetRelativePath(ModPath, file)
-                                      .Replace('\\', '/')
+                                      .Clean()
                                       .TrimStart('/')
                                       .TrimEnd('/');
+
+        string destinationFile = Path.Join(OutputPath, relativeFileName);
 
         // Ignore the file if we need to
         if (relativeFileName == "ignored_files.mod" || ignoredFiles.IsIgnored(relativeFileName))
@@ -120,8 +164,19 @@ internal class ModBuilder(string modPath, string outputPath)
             return;
         }
 
+        // Mod descriptor
+        if (relativeFileName == "descriptor.mod")
+        {
+            string descriptorContents = File.ReadAllText(file);
+            descriptorContents = TransformDescriptorContents(descriptorContents);
+
+            PrintCopyMessage(file, destinationFile);
+            CreateFolderForFile(destinationFile);
+            File.WriteAllText(destinationFile, descriptorContents);
+            return;
+        }
+
         // Normal files
-        string destinationFile = Path.Join(OutputPath, relativeFileName);
         PrintCopyMessage(file, destinationFile);
         CreateFolderForFile(destinationFile);
         File.Copy(file, destinationFile, true);
@@ -176,6 +231,25 @@ internal class ModBuilder(string modPath, string outputPath)
         }
     }
 
+    private string TransformDescriptorContents(string contents)
+    {
+        // Add " - Dev Version" onto the end of a dev builds name
+        if (!IsDevBuild)
+            return contents;
+
+        var lines = contents.Split('\n').ToList();
+        int nameLineIndex = lines.FindIndex(l => l.Trim().StartsWith("name", StringComparison.OrdinalIgnoreCase));
+        if (nameLineIndex == -1)
+            return contents;
+
+        string nameLine = lines[nameLineIndex];
+        int endQuoteIndex = nameLine.LastIndexOf('"');
+        nameLine = nameLine.Insert(endQuoteIndex, " - Dev Version");
+        lines[nameLineIndex] = nameLine;
+
+        return string.Join('\n', lines);
+    }
+
     private static Image ConvertSvgToBitmap(string file)
     {
         var svg = SvgDocument.Open(file);
@@ -199,6 +273,6 @@ internal class ModBuilder(string modPath, string outputPath)
 
     private static void PrintCopyMessage(string sourcePath, string destinationPath)
     {
-        Console.WriteLine($"Copying '{sourcePath.Replace('\\', '/')}'\n     to '{destinationPath.Replace('\\', '/')}'");
+        Console.WriteLine($"Copying '{sourcePath.Clean()}'\n     to '{destinationPath.Clean()}'");
     }
 }
