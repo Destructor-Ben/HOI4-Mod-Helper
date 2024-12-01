@@ -19,7 +19,5 @@
     - `.tiff`
     - `.bmp`
     - `.png`
-    - `.dds`
-    - `.svg`
   - Converts all except the thumbnail to TGA or DDS
 - Automatically generates different sized flag textures

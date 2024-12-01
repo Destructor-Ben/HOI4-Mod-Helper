@@ -1,13 +1,13 @@
-﻿using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
+using HOI4ModHelper.Dds;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Tga;
+using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
-using Svg;
 using Image = SixLabors.ImageSharp.Image;
 
 namespace HOI4ModHelper;
 
-// TODO: finish the DDS stuff
 internal class ModBuilder(string modPath, string outputPath, bool isDevBuild)
 {
     public string ModPath { get; } = modPath.Clean();
@@ -32,6 +32,9 @@ internal class ModBuilder(string modPath, string outputPath, bool isDevBuild)
 
     private readonly Ignore.Ignore ignoredFiles = new();
 
+    // HOI4 needs specific file formats
+    private static readonly TgaEncoder TgaEncoder = new() { BitsPerPixel = TgaBitsPerPixel.Pixel32, Compression = TgaCompression.None };
+
     private static readonly List<string> SupportedImageFormats =
     [
         ".gif",
@@ -43,8 +46,6 @@ internal class ModBuilder(string modPath, string outputPath, bool isDevBuild)
         ".tiff",
         ".bmp",
         ".png",
-        // TODO: ".dds",
-        ".svg",
     ];
 
     public void Build()
@@ -120,9 +121,16 @@ internal class ModBuilder(string modPath, string outputPath, bool isDevBuild)
 
         void UpdateFile(string file)
         {
-            Console.WriteLine();
-            Console.WriteLine("File changed: " + file);
-            TransformFile(file);
+            try
+            {
+                Console.WriteLine();
+                Console.WriteLine("File changed: " + file);
+                TransformFile(file);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"Error occured: {e}");
+            }
         }
     }
 
@@ -184,12 +192,9 @@ internal class ModBuilder(string modPath, string outputPath, bool isDevBuild)
 
     private void TransformImage(string file, string extension, string relativeFileName)
     {
-        // TODO: dds saving and loading
         // Load image
-        using var image = extension is ".svg" ? ConvertSvgToBitmap(file) : Image.Load(file);
-
-        // Default output is a DDS
-        string outputType = "png"; // TODO: "dds";
+        using var image = Image.Load<Rgba32>(file);
+        string outputType = "dds";
 
         // Make thumbnail.png output type a PNG
         if (Path.ChangeExtension(relativeFileName, null) == "thumbnail")
@@ -210,12 +215,16 @@ internal class ModBuilder(string modPath, string outputPath, bool isDevBuild)
 
         return;
 
-        void CopyImage(Image imageToCopy, string outputFile)
+        void CopyImage(Image<Rgba32> imageToCopy, string outputFile, bool isTga = false)
         {
             string destinationFile = Path.Join(OutputPath, Path.ChangeExtension(outputFile, outputType));
             PrintCopyMessage(file, destinationFile);
             CreateFolderForFile(destinationFile);
-            imageToCopy.Save(destinationFile); // TODO: allow saving as DDS
+
+            if (!isTga)
+                imageToCopy.EncodeAsDds(destinationFile);
+            else
+                imageToCopy.Save(destinationFile, TgaEncoder);
         }
 
         void CopyFlag(int width, int height, string flagsFolder)
@@ -227,7 +236,7 @@ internal class ModBuilder(string modPath, string outputPath, bool isDevBuild)
 
             // Copy
             using var newImage = image.Clone(i => i.Resize(width, height));
-            CopyImage(newImage, string.Join('/', path));
+            CopyImage(newImage, string.Join('/', path), true);
         }
     }
 
@@ -248,19 +257,6 @@ internal class ModBuilder(string modPath, string outputPath, bool isDevBuild)
         lines[nameLineIndex] = nameLine;
 
         return string.Join('\n', lines);
-    }
-
-    private static Image ConvertSvgToBitmap(string file)
-    {
-        var svg = SvgDocument.Open(file);
-
-        // Not all svgs will have width and height attributes (automatically handled), sometimes a view box instead
-        // TODO: handle view box attribute, also supply default width and height since not all SVGs will have a width and height - maybe we just don't care
-        var bitmap = svg.Draw();
-        using var stream = new MemoryStream();
-        bitmap.Save(stream, ImageFormat.Bmp);
-        stream.Seek(0, SeekOrigin.Begin);
-        return Image.Load(stream);
     }
 
     // For some reason, the folder has to be created if it doesn't exist for stuff like copying
